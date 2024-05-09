@@ -13,10 +13,12 @@ contract ChainGame {
         address owner;
         address[] players;
         address nextToPay;
+        uint initialDate;
+        uint timeToPay;
     }
 
     uint numGames = 0;
-    mapping (uint => Game) private games;
+    mapping (uint => Game) public games;
     mapping (address => Player) public players;
     mapping (address => bool) private registered;
     mapping (uint => mapping(address => bool)) private hasPaid;
@@ -38,13 +40,16 @@ contract ChainGame {
         registered[msg.sender] = true;
     }
 
-    function createGame() public returns (uint) {
+    function createGame(uint daysToStart, uint daysToPay) public returns (uint) {
+        uint initialDate = block.timestamp + daysToStart * 1 days;
         games[numGames] = Game(
             msg.sender,
             new address[](0),
-            msg.sender
+            msg.sender,
+            initialDate,
+            daysToPay * 1 days
         );
-
+    
         games[numGames].players.push(msg.sender);
         players[msg.sender].gameIds.push(numGames);
 
@@ -54,5 +59,16 @@ contract ChainGame {
     function enterGame(uint gameId) public {
         games[gameId].players.push(msg.sender);
         players[msg.sender].gameIds.push(gameId);
+    }
+
+    function myGames() view public returns(Game[] memory) {
+        uint[] memory gameIds = players[msg.sender].gameIds;
+
+        Game[] memory tmpGames = new Game[](gameIds.length);
+        for (uint i = 0; i < gameIds.length; i++) {
+            tmpGames[i] = games[gameIds[i]];
+        }
+
+        return tmpGames;
     }
 }
