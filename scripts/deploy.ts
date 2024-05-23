@@ -1,15 +1,20 @@
 import hre from "hardhat";
 
 async function main() {
-  const SimpleContractFactory = await hre.ethers.getContractFactory(
-    "SimpleContract"
+  const ChainGameFactory = await hre.ethers.getContractFactory(
+    "ChainGame"
   );
 
-  const simpleContract = await SimpleContractFactory.deploy();
+  const chainGame = await ChainGameFactory.deploy();
 
-  await simpleContract.waitForDeployment();
+  await chainGame.waitForDeployment();
 
-  const contractAddress = simpleContract.address;
+  const contractAddress = await chainGame.getAddress();
 
-  console.log("SimpleContract deployed to:", contractAddress);
+  console.log("ChainGame deployed to:", contractAddress);
 }
+
+main().catch((error) => {
+  console.error(error);
+  process.exit(1);
+});
