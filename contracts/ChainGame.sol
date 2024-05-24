@@ -3,361 +3,222 @@
 pragma solidity ^0.8.24;
 
 contract ChainGame {
-    /// ---- Data models ---- ///
-    struct Player {
-        string name;
-        bool inGame;
-        uint256 gameId;
-    }
-
-    struct Game {
+    struct Chain {
         address owner;
-        address[] players;
-        uint256 amount;
+        uint256 numValidUsers;
+        address[] users;
+        string[] userNames;
+        uint256 amountToPay;
         uint256 initialDate;
         uint256 timeToPay;
-        uint256 daysOfGrace;
         uint256 balance;
-        uint256[] numPayments;
-        uint256 numPlayersWithdraw;
     }
 
     /// ---- Global atributes ---- ///
-    uint256 numGames = 0;
-    mapping(uint256 => Game) private games;
-    mapping(address => Player) private players;
-    mapping(address => bool) private registered;
-    mapping(uint256 => mapping(address => bool)) private canReceive;
-    mapping(address => bool) private blacklist;
+
+    // Chain feature
+    uint256 public numChains = 0;
+    mapping(uint256 => Chain) public chains;
+    mapping(uint256 => mapping(address => uint256)) private timesPaid;
+    mapping(uint256 => mapping(address => bool)) private hasWithdraw;
+    mapping(address => mapping(uint256 => bool)) private isInChain;
+
+    // Ban feature
+    mapping(address => int256) private banDate;
+    mapping(address => uint256) public timesBeingBanned;
 
     /// ---- modifiers ---- ///
-    modifier notRegistered() {
-        require(!registered[msg.sender], "Already registered");
+
+    modifier notBanned() {
+        require(!isBanned(msg.sender), "You are banned");
         _;
     }
 
-    modifier isRegistered() {
-        require(registered[msg.sender], "Not registered");
+    modifier isOwner(uint256 chainId) {
+        require(chainId < numChains, "Chain id doesn't exists");
+        require(
+            chains[chainId].owner == msg.sender,
+            "You don't have perssions to operate this action"
+        );
         _;
     }
 
-    modifier isNotInGame() {
-        if (gameHasEnded(players[msg.sender].gameId)) {
-            players[msg.sender].inGame = false;
+    /// ---- Chain logic methods ---- ///
+
+    function createChain(
+        string memory ownerName,
+        uint256 amountToPay,
+        uint256 daysToStart,
+        uint256 daysToPay
+    ) public notBanned returns (uint256) {
+        assert(amountToPay > 0);
+        assert(daysToStart > 0);
+        assert(daysToPay > 0);
+
+        uint256 initialDate = block.timestamp + daysToStart * 1 minutes; // testing with minutes
+        chains[numChains] = Chain(
+            msg.sender,
+            1,
+            new address[](0),
+            new string[](0),
+            amountToPay,
+            initialDate,
+            daysToPay * 1 minutes, // testing with minutes
+            0
+        );
+
+        chains[numChains].users.push(msg.sender);
+        chains[numChains].userNames.push(ownerName);
+        timesPaid[numChains][msg.sender] = 0;
+        hasWithdraw[numChains][msg.sender] = false;
+        isInChain[msg.sender][numChains] = true;
+
+        return numChains++; // returns chain Id
+    }
+
+    function enterChain(uint256 chainId, string memory userName)
+        public
+        notBanned
+    {
+        require(chainId < numChains, "Chain id doesn't exists");
+        require(
+            chains[chainId].initialDate > block.timestamp,
+            "The chain has already started"
+        );
+        require(
+            !isInChain[msg.sender][chainId],
+            "You are already in this chain"
+        );
+
+        chains[chainId].users.push(msg.sender);
+        chains[chainId].userNames.push(userName);
+        chains[chainId].numValidUsers++;
+        timesPaid[chainId][msg.sender] = 0;
+        hasWithdraw[chainId][msg.sender] = false;
+        isInChain[msg.sender][chainId] = true;
+    }
+
+    function pay(uint256 chainId) public payable notBanned returns (bool) {
+        require(chainId < numChains, "Chain id doesn't exists");
+        require(!chainHasEnded(chainId), "The chain has ended");
+        require(isInChain[msg.sender][chainId], "You are not in this chain");
+        require(
+            chains[chainId].initialDate < block.timestamp,
+            "The chain hasn't started yet"
+        );
+        require(
+            numPayments(chainId) > timesPaid[chainId][msg.sender],
+            "You don't owe anything"
+        );
+        require(
+            msg.value == chains[chainId].amountToPay,
+            "The amount sent is not correct"
+        );
+
+        chains[chainId].balance += msg.value;
+        timesPaid[chainId][msg.sender]++;
+        return true;
+    }
+
+    function withdraw(uint256 chainId) public notBanned {
+        require(chainId < numChains, "Chain id doesn't exists");
+        require(isInChain[msg.sender][chainId], "You are not in this chain");
+        require(canWithdraw(chainId, msg.sender), "You can't withdraw yet");
+        require(
+            !hasWithdraw[chainId][msg.sender],
+            "You have already withdrawn"
+        );
+        require(
+            numPayments(chainId) == timesPaid[chainId][msg.sender],
+            "You owe money, please pay before withdrawing"
+        );
+
+        uint256 total = chains[chainId].amountToPay *
+            chains[chainId].numValidUsers;
+
+        require(
+            chains[chainId].balance >= total || chainHasEnded(chainId),
+            "Other users in the chain hasn't paid yet"
+        );
+
+        assert(payable(msg.sender).send(total));
+
+        hasWithdraw[chainId][msg.sender] = true;
+    }
+
+    function ban(uint256 chainId, address user) public isOwner(chainId) {
+        require(
+            isInChain[user][chainId],
+            "The user is not in the specific chain"
+        );
+        require(!isBanned(user), "The user is already banned");
+        require(user != msg.sender, "You can't ban yourself");
+        require(
+            numPayments(chainId) > timesPaid[chainId][user],
+            "The user don't owe anything"
+        );
+
+        timesBeingBanned[user]++;
+        if (timesBeingBanned[user] >= 10) {
+            banDate[user] = -1;
+        } else {
+            banDate[user] = int256(
+                timesBeingBanned[user] * 1 minutes + block.timestamp // testing with minutes
+            );
         }
-        require(!players[msg.sender].inGame, "You are already in a game");
-        _;
-    }
 
-    modifier isActiveGame(uint256 gameId) {
-        require(!gameHasEnded(gameId), "The game has already ended");
-        require(
-            games[gameId].initialDate > block.timestamp,
-            "The game has already started"
-        );
-        _;
-    }
-
-    modifier gameHasStarted(uint256 gameId) {
-        require(
-            games[gameId].initialDate < block.timestamp,
-            "The game hasn't started yet"
-        );
-        _;
-    }
-
-    modifier notInBlackList(uint256 gameId) {
-        require(!inBlacklist(msg.sender, gameId));
-        _;
-    }
-
-    modifier isInGame(address player, uint256 gameId) {
-        require(
-            players[player].inGame && !gameHasEnded(gameId),
-            "You are not in a game"
-        );
-        bool found = false;
-        if (players[player].gameId == gameId) {
-            found = true;
+        for (uint256 i = 0; i < numChains; i++) {
+            if (isInChain[user][i]) {
+                isInChain[user][i] = false;
+                chains[i].numValidUsers--;
+            }
         }
-        require(found, "You are not in the specified game");
-        _;
     }
 
     /// ---- internal funcions ---- ///
 
-    function shufflePlayers(uint256 gameId) internal {
-        Game storage game = games[gameId];
-        uint256 n = game.players.length;
-        while (n > 1) {
-            uint256 randIndex = uint256(
-                keccak256(abi.encodePacked(block.timestamp, msg.sender, n))
-            ) % n;
-            n--;
-            address temp = game.players[n];
-            game.players[n] = game.players[randIndex];
-            game.players[randIndex] = temp;
+    function numPayments(uint256 chainId) internal view returns (uint256) {
+        uint256 timeElapsed = block.timestamp - chains[chainId].initialDate;
+
+        uint256 payments = uint256(timeElapsed / chains[chainId].timeToPay) + 1;
+
+        if (payments <= chains[chainId].numValidUsers) {
+            return payments;
         }
+        return chains[chainId].numValidUsers;
     }
 
-    function getIndexFromGame(address player, uint256 gameId)
+    function chainHasEnded(uint256 chainId) internal view returns (bool) {
+        uint256 timeElapsed = block.timestamp - chains[chainId].initialDate;
+
+        return
+            timeElapsed >
+            chains[chainId].timeToPay * chains[chainId].users.length;
+    }
+
+    function isBanned(address user) internal view returns (bool) {
+        return
+            banDate[user] == -1 || // is banned indefinitely after 10 times banned
+                uint256(banDate[user]) >= block.timestamp;
+    }
+
+    function canWithdraw(uint256 chainId, address user)
         internal
         view
-        isInGame(player, gameId)
-        returns (int256)
+        returns (bool)
     {
+        uint256 timeElapsed = block.timestamp - chains[chainId].initialDate;
+
         int256 index = -1;
-        for (uint256 i = 0; i < games[gameId].players.length; i++) {
-            if (games[gameId].players[i] == player) {
+        for (uint256 i = 0; i < chains[chainId].users.length; i++) {
+            if (chains[chainId].users[i] == user) {
                 index = int256(i);
                 break;
             }
         }
-        return index;
-    }
 
-    function numTimesPaid(uint256 gameId) internal view returns (uint256) {
-        uint256 timeElapsed = block.timestamp - games[gameId].initialDate;
+        assert(index != -1);
 
-        uint256 timesPaid = uint256(timeElapsed / games[gameId].timeToPay);
-
-        assert(timesPaid < games[gameId].players.length);
-
-        return uint256(timeElapsed / games[gameId].timeToPay);
-    }
-
-    function canPay(address player, uint256 gameId) internal returns (bool) {
-        uint256 timesPaid = numTimesPaid(gameId);
-
-        uint256 index = uint256(getIndexFromGame(player, gameId));
-
-        if (timesPaid - 1 > games[gameId].numPayments[index]) {
-            if (
-                timesPaid - 2 == games[gameId].numPayments[index] &&
-                nextToWithdraw(gameId) == index
-            ) {
-                games[gameId].numPayments[index]++;
-                return true;
-            }
-
-            return false;
-        }
-
-        return true;
-    }
-
-    function hasPaid(address player, uint256 gameId) internal returns (bool) {
-        uint256 timesPaid = numTimesPaid(gameId);
-        uint256 index = uint256(getIndexFromGame(player, gameId));
-
-        if (timesPaid == games[gameId].numPayments[index]) {
-            return true;
-        }
-        if (
-            timesPaid - 1 == games[gameId].numPayments[index] &&
-            nextToWithdraw(gameId) == index
-        ) {
-            games[gameId].numPayments[index]++;
-            return true;
-        }
-
-        return false;
-    }
-
-    function canReceivePayment(address player, uint256 gameId)
-        internal
-        view
-        returns (bool)
-    {
-        if (canReceive[gameId][player]) {
-            return true;
-        }
-        uint256 index = nextToWithdraw(gameId);
-
-        return player == games[gameId].players[index];
-    }
-
-    function inBlacklist(address player, uint256 gameId)
-        internal
-        returns (bool)
-    {
-        if (blacklist[player]) {
-            return true;
-        }
-
-        if (canPay(player, gameId)) {
-            return false;
-        }
-
-        blacklist[player] = true;
-
-        return false;
-    }
-
-    function gameHasEnded(uint256 gameId) internal view returns (bool) {
-        uint256 timeElapsed = block.timestamp - games[gameId].initialDate;
-
-        return
-            timeElapsed >
-            games[gameId].timeToPay * games[gameId].players.length;
-    }
-
-    /// ---- contract methods ---- ///
-
-    // --- Game info methods --- //
-    function allActiveGames() public view isRegistered returns (Game[] memory) {
-        Game[] memory tmpGames = new Game[](numGames);
-
-        uint256 k = 0;
-        for (uint256 i = 0; i < numGames; i++) {
-            if (games[i].initialDate < block.timestamp) {
-                continue;
-            }
-            tmpGames[k] = games[i];
-            k++;
-        }
-
-        return tmpGames;
-    }
-
-    function getGameInfo(uint256 gameId)
-        public
-        view
-        isRegistered
-        returns (Game memory)
-    {
-        return games[gameId];
-    }
-
-    function createGame(
-        uint256 amount,
-        uint256 daysToStart,
-        uint256 daysToPay,
-        uint256 daysOfGrace
-    ) public isRegistered isNotInGame returns (uint256) {
-        assert(amount > 0);
-        assert(daysToStart > 0);
-        assert(daysToPay > 0);
-
-        uint256 initialDate = block.timestamp + daysToStart * 1 days;
-        games[numGames] = Game(
-            msg.sender,
-            new address[](0),
-            amount,
-            initialDate,
-            daysToPay * 1 days,
-            daysOfGrace * 1 days,
-            0,
-            new uint256[](0),
-            0
-        );
-
-        games[numGames].players.push(msg.sender);
-        players[msg.sender].gameId = numGames;
-        players[msg.sender].inGame = true;
-        games[numGames].numPayments.push(0);
-
-        return numGames++;
-    }
-
-    function enterGame(uint256 gameId)
-        public
-        isRegistered
-        notInBlackList(gameId)
-        isNotInGame
-        isActiveGame(gameId)
-    {
-        games[gameId].players.push(msg.sender);
-        players[msg.sender].gameId = gameId;
-        games[gameId].numPayments.push(0);
-        shufflePlayers(gameId);
-    }
-
-    function register(string memory name) public notRegistered {
-        Player memory newPlayer = Player(name, false, 0);
-        players[msg.sender] = newPlayer;
-        registered[msg.sender] = true;
-    }
-
-    function playersByGameId(uint256 gameId)
-        public
-        view
-        isRegistered
-        returns (Player[] memory)
-    {
-        address[] memory playersAddresses = games[gameId].players;
-
-        Player[] memory tmpPlayers = new Player[](playersAddresses.length);
-        for (uint256 i = 0; i < playersAddresses.length; i++) {
-            tmpPlayers[i] = players[playersAddresses[i]];
-        }
-
-        return tmpPlayers;
-    }
-
-    function nextToWithdraw(uint256 gameId)
-        public
-        view
-        gameHasStarted(gameId)
-        returns (uint256)
-    {
-        uint256 timeElapsed = block.timestamp - games[gameId].initialDate;
-
-        uint256 index = uint256(timeElapsed / games[gameId].timeToPay);
-
-        return index;
-    }
-
-    // --- Player info methods --- //
-    function getMyInfo() public view isRegistered returns (Player memory) {
-        return players[msg.sender];
-    }
-
-    function myGame() public isRegistered returns (Game memory) {
-        if (gameHasEnded(players[msg.sender].gameId)) {
-            players[msg.sender].inGame = false;
-            assert(false);
-        }
-        return games[players[msg.sender].gameId];
-    }
-
-    // --- Game logic methods --- //
-
-    function pay(uint256 gameId)
-        public
-        payable
-        isRegistered
-        isInGame(msg.sender, gameId)
-        gameHasStarted(gameId)
-        notInBlackList(gameId)
-        returns (bool)
-    {
-        if (!canPay(msg.sender, gameId)) {
-            blacklist[msg.sender] = true;
-            return false;
-        }
-        assert(msg.value == games[gameId].amount);
-        assert(!hasPaid(msg.sender, gameId));
-
-        uint256 index = uint256(getIndexFromGame(msg.sender, gameId));
-        games[gameId].balance += msg.value;
-        games[gameId].numPayments[index]++;
-        return true;
-    }
-
-    function withdraw(uint256 gameId)
-        public
-        payable
-        isRegistered
-        isInGame(msg.sender, gameId)
-        notInBlackList(gameId)
-    {
-        address payable player = payable(msg.sender);
-
-        uint256 total = games[gameId].amount * games[gameId].players.length;
-
-        assert(games[gameId].balance >= total);
-
-        assert(player.send(total));
+        return chains[chainId].timeToPay * uint256(index) <= timeElapsed;
     }
 }
