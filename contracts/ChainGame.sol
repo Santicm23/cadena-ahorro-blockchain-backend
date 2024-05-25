@@ -4,14 +4,14 @@ pragma solidity ^0.8.24;
 
 contract ChainGame {
     struct Chain {
+        uint256 chainId;
         address owner;
-        uint256 numValidUsers;
-        address[] users;
-        string[] userNames;
+        uint256 validUsers;
         uint256 amountToPay;
         uint256 initialDate;
         uint256 timeToPay;
         uint256 balance;
+        address[] users;
     }
 
     /// ---- Global atributes ---- ///
@@ -36,17 +36,16 @@ contract ChainGame {
 
     modifier isOwner(uint256 chainId) {
         require(chainId < numChains, "Chain id doesn't exists");
-        require(
+        /*require(
             chains[chainId].owner == msg.sender,
             "You don't have perssions to operate this action"
-        );
+        );*/
         _;
     }
 
     /// ---- Chain logic methods ---- ///
 
     function createChain(
-        string memory ownerName,
         uint256 amountToPay,
         uint256 daysToStart,
         uint256 daysToPay
@@ -57,18 +56,17 @@ contract ChainGame {
 
         uint256 initialDate = block.timestamp + daysToStart * 1 minutes; // testing with minutes
         chains[numChains] = Chain(
+            numChains,
             msg.sender,
             1,
-            new address[](0),
-            new string[](0),
             amountToPay,
             initialDate,
             daysToPay * 1 minutes, // testing with minutes
-            0
+            0,
+            new address[](0)
         );
 
         chains[numChains].users.push(msg.sender);
-        chains[numChains].userNames.push(ownerName);
         timesPaid[numChains][msg.sender] = 0;
         hasWithdraw[numChains][msg.sender] = false;
         isInChain[msg.sender][numChains] = true;
@@ -76,10 +74,7 @@ contract ChainGame {
         return numChains++; // returns chain Id
     }
 
-    function enterChain(uint256 chainId, string memory userName)
-        public
-        notBanned
-    {
+    function enterChain(uint256 chainId) public notBanned {
         require(chainId < numChains, "Chain id doesn't exists");
         require(
             chains[chainId].initialDate > block.timestamp,
@@ -91,8 +86,7 @@ contract ChainGame {
         );
 
         chains[chainId].users.push(msg.sender);
-        chains[chainId].userNames.push(userName);
-        chains[chainId].numValidUsers++;
+        chains[chainId].validUsers++;
         timesPaid[chainId][msg.sender] = 0;
         hasWithdraw[chainId][msg.sender] = false;
         isInChain[msg.sender][chainId] = true;
@@ -134,7 +128,7 @@ contract ChainGame {
         );
 
         uint256 total = chains[chainId].amountToPay *
-            chains[chainId].numValidUsers;
+            chains[chainId].validUsers;
 
         require(
             chains[chainId].balance >= total || chainHasEnded(chainId),
@@ -170,9 +164,41 @@ contract ChainGame {
         for (uint256 i = 0; i < numChains; i++) {
             if (isInChain[user][i]) {
                 isInChain[user][i] = false;
-                chains[i].numValidUsers--;
+                chains[i].validUsers--;
             }
         }
+    }
+
+    /// ---- info methods ---- ///
+
+    function getIndebtedUsers(uint256 chainId)
+        public
+        view
+        isOwner(chainId)
+        returns (address[] memory)
+    {
+        require(chainId < numChains, "Chain id doesn't exists");
+        require(!chainHasEnded(chainId), "The chain has ended");
+        require(
+            chains[chainId].initialDate < block.timestamp,
+            "The chain hasn't started yet"
+        );
+
+        address[] memory addrs = new address[](chains[chainId].validUsers);
+
+        uint256 k = 0;
+        for (uint256 i = 0; i < chains[chainId].users.length; i++) {
+            address user = chains[chainId].users[i];
+            if (
+                isInChain[user][chainId] &&
+                numPayments(chainId) > timesPaid[chainId][user]
+            ) {
+                addrs[k] = user;
+                k++;
+            }
+        }
+
+        return addrs;
     }
 
     /// ---- internal funcions ---- ///
@@ -182,10 +208,10 @@ contract ChainGame {
 
         uint256 payments = uint256(timeElapsed / chains[chainId].timeToPay) + 1;
 
-        if (payments <= chains[chainId].numValidUsers) {
+        if (payments <= chains[chainId].validUsers) {
             return payments;
         }
-        return chains[chainId].numValidUsers;
+        return chains[chainId].validUsers;
     }
 
     function chainHasEnded(uint256 chainId) internal view returns (bool) {
@@ -199,7 +225,7 @@ contract ChainGame {
     function isBanned(address user) internal view returns (bool) {
         return
             banDate[user] == -1 || // is banned indefinitely after 10 times banned
-                uint256(banDate[user]) >= block.timestamp;
+            uint256(banDate[user]) >= block.timestamp;
     }
 
     function canWithdraw(uint256 chainId, address user)
