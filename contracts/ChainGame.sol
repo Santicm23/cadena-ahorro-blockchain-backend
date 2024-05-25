@@ -178,11 +178,6 @@ contract ChainGame {
         returns (address[] memory)
     {
         require(chainId < numChains, "Chain id doesn't exists");
-        require(!chainHasEnded(chainId), "The chain has ended");
-        require(
-            chains[chainId].initialDate < block.timestamp,
-            "The chain hasn't started yet"
-        );
 
         address[] memory addrs = new address[](chains[chainId].validUsers);
 
@@ -191,7 +186,8 @@ contract ChainGame {
             address user = chains[chainId].users[i];
             if (
                 isInChain[user][chainId] &&
-                numPayments(chainId) > timesPaid[chainId][user]
+                numPayments(chainId) - 1 > timesPaid[chainId][user]
+                && user != chains[chainId].owner
             ) {
                 addrs[k] = user;
                 k++;
